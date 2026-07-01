@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>포니봇 얼굴 추적 터렛 (MediaPipe Face Detection)</title>
+<style>
+  :root{ --navy:#1f3864; --blue:#2563eb; --teal:#0e9e92; --amber:#e08a1e;
+         --red:#c0463b; --purple:#6d45c0; --ink:#1f2937; --muted:#6b7280;
+         --pan:#2563eb; --tilt:#e08a1e; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:"맑은 고딕","Malgun Gothic",system-ui,sans-serif;
+        background:#f5f7fa; color:var(--ink); padding:20px; }
+  .wrap{ max-width:620px; margin:0 auto; }
+  h1{ color:var(--navy); font-size:21px; margin:0 0 4px; }
+  .sub{ color:var(--muted); font-size:14px; margin:0 0 16px; }
+  .card{ background:#fff; border:1px solid #e7ecf2; border-radius:14px; padding:16px; margin-bottom:14px; }
+  #status{ background:#eef3fe; border:1px solid var(--blue); color:var(--navy);
+           border-radius:10px; padding:11px 13px; font-weight:bold; font-size:14px; }
+  .row{ display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
+  button{ font-family:inherit; font-size:15px; font-weight:bold; border:none; border-radius:10px;
+          padding:12px 16px; cursor:pointer; color:#fff; }
+  button:disabled{ opacity:.45; cursor:not-allowed; }
+  #btnConnect{ background:var(--blue); }
+  #btnCam{ background:var(--purple); font-size:17px; padding:14px; width:100%; }
+  #btnCam.on{ background:var(--red); }
+  #btnCenter{ background:#fff; color:var(--navy); border:1px solid #d8dee8; }
+  .view{ position:relative; width:100%; aspect-ratio:4/3; background:#000; border-radius:12px;
+         overflow:hidden; transform:scaleX(-1); }   /* 거울 모드 */
+  video,canvas{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .label{ font-size:13px; font-weight:bold; color:var(--muted); margin:6px 0; }
+  .joint{ margin:10px 0; }
+  .joint .top{ display:flex; justify-content:space-between; font-size:14px; }
+  .joint .top b{ font-weight:800; }
+  .gauge{ height:12px; background:#eef1f6; border-radius:6px; overflow:hidden; margin-top:3px; }
+  .gauge > i{ display:block; height:100%; width:50%; transition:width .08s; }
+  label.chk{ display:flex; align-items:center; gap:6px; font-size:13px; }
+  .hint{ font-size:12.5px; color:var(--muted); line-height:1.6; }
+  code{ background:#eef1f6; padding:1px 6px; border-radius:5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎯 포니봇 얼굴 추적 터렛</h1>
+  <p class="sub">화면 속 얼굴 위치를 서보 2축(수평·수직) 각도로 바꿔, 포니봇 머리가 얼굴을 따라 움직입니다.</p>
+
+  <div class="card">
+    <div id="status">초기화 중...</div>
+    <div class="row">
+      <button id="btnConnect">① 포니봇 연결</button>
+      <button id="btnCam" disabled>② 카메라 시작</button>
+      <button id="btnCenter">중앙</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="view"><video id="video" playsinline muted></video><canvas id="canvas"></canvas></div>
+
+    <div class="joint">
+      <div class="top"><span style="color:var(--pan)">↔ 수평 (pan · S1)</span><b id="vPan">90</b></div>
+      <div class="gauge"><i id="gPan" style="background:var(--pan)"></i></div>
+    </div>
+    <div class="joint">
+      <div class="top"><span style="color:var(--tilt)">↕ 수직 (tilt · S2)</span><b id="vTilt">90</b></div>
+      <div class="gauge"><i id="gTilt" style="background:var(--tilt)"></i></div>
+    </div>
+
+    <div class="row" style="margin-top:6px">
+      <label class="chk"><input type="checkbox" id="invPan"> 수평 반전</label>
+      <label class="chk"><input type="checkbox" id="invTilt"> 수직 반전</label>
+    </div>
+  </div>
+
+  <p class="hint">
+    ※ <b>Chrome</b> + <b>HTTPS 주소</b>(GitHub Pages 등)에서 실행하세요. 카메라·블루투스 권한 허용 필요.<br>
+    ※ 얼굴이 정면 가까이 보일 때 잘 추적합니다. 머리가 <b>반대로</b> 돌면 반전 체크박스를 켜세요.<br>
+    ※ 얼굴이 안 보이면 마지막 위치를 유지합니다.
+  </p>
+</div>
+
+<!-- MediaPipe Face Detection -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js" crossorigin="anonymous"></script>
+<script>
+// ── 포니봇 BLE UUID (Nordic UART, ble_library.py와 일치) ──
+const NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const NUS_RX      = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+
+const $ = id => document.getElementById(id);
+const setStatus = m => { $('status').textContent = m; };
+
+// ── 서보 각도 범위(펌웨어와 동일) ──
+const PAN = {min:10, max:170}, TILT = {min:40, max:150};
+const POS_MIN = 0.15, POS_MAX = 0.85;   // 화면 가장자리 컷(안정화)
+const SMOOTH  = 0.30;                   // EMA 평활
+
+let rxChar = null, camera = null, running = false;
+let curPan = 90, curTilt = 90;
+let lastStr = '', lastSend = 0;
+
+const video  = $('video');
+const canvas = $('canvas');
+const ctx    = canvas.getContext('2d');
+const invPan  = () => $('invPan').checked;
+const invTilt = () => $('invTilt').checked;
+
+// ── 1) Web Bluetooth 연결 ──
+$('btnConnect').onclick = async () => {
+  if(!navigator.bluetooth){ setStatus('이 브라우저는 Web Bluetooth 미지원 (Chrome 사용)'); return; }
+  try{
+    const device  = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'ESP' }], optionalServices: [NUS_SERVICE] });
+    setStatus('연결 중...');
+    const server  = await device.gatt.connect();
+    const service = await server.getPrimaryService(NUS_SERVICE);
+    rxChar = await service.getCharacteristic(NUS_RX);
+    device.addEventListener('gattserverdisconnected', () => { rxChar = null; setStatus('⚠️ 포니봇 연결 끊김'); });
+    setStatus('✅ 포니봇 연결됨! ② 카메라 시작을 누르세요.');
+  }catch(e){ setStatus('연결 실패: ' + e.message); }
+};
+
+// ── 2) 서보 명령 전송 ("P:90,T:60") ──
+async function sendRaw(text){
+  if(!rxChar) return;
+  try{
+    const d = new TextEncoder().encode(text);
+    if(rxChar.writeValueWithoutResponse) await rxChar.writeValueWithoutResponse(d);
+    else await rxChar.writeValue(d);
+  }catch(e){}
+}
+function pushServo(){
+  const s = 'P:' + Math.round(curPan) + ',T:' + Math.round(curTilt);
+  const now = performance.now();
+  if(s !== lastStr && now - lastSend > 70){ sendRaw(s); lastStr = s; lastSend = now; }
+}
+$('btnCenter').onclick = () => { curPan = 90; curTilt = 90; paint(); sendRaw('CENTER'); lastStr=''; };
+
+// ── 3) 각도 게이지 ──
+function gauge(id, v, r){
+  $('v'+id).textContent = Math.round(v);
+  $('g'+id).style.width = ((v - r.min) / (r.max - r.min) * 100) + '%';
+}
+function paint(){ gauge('Pan', curPan, PAN); gauge('Tilt', curTilt, TILT); }
+
+// ── 4) 좌표 → 각도 ──
+function mapClamp(x, inLo, inHi, outLo, outHi, invert){
+  let t = (x - inLo) / (inHi - inLo); t = Math.max(0, Math.min(1, t));
+  if(invert) t = 1 - t;
+  return outLo + t * (outHi - outLo);
+}
+
+// ── 5) MediaPipe 결과 ──
+function onResults(res){
+  canvas.width = video.videoWidth || 640; canvas.height = video.videoHeight || 480;
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
+
+  // 화면 중앙 십자선
+  ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(canvas.width/2, 0); ctx.lineTo(canvas.width/2, canvas.height);
+  ctx.moveTo(0, canvas.height/2); ctx.lineTo(canvas.width, canvas.height/2); ctx.stroke();
+
+  const dets = res.detections;
+  if(dets && dets.length){
+    const bb = dets[0].boundingBox;           // xCenter,yCenter,width,height (0~1)
+    const fx = bb.xCenter, fy = bb.yCenter;
+
+    // 얼굴 박스
+    const bx = (fx - bb.width/2) * canvas.width, by = (fy - bb.height/2) * canvas.height;
+    ctx.strokeStyle = '#6d45c0'; ctx.lineWidth = 3;
+    ctx.strokeRect(bx, by, bb.width * canvas.width, bb.height * canvas.height);
+    ctx.fillStyle = '#e08a1e';
+    ctx.beginPath(); ctx.arc(fx*canvas.width, fy*canvas.height, 6, 0, 7); ctx.fill();
+
+    // 좌표 → 목표 각도 (수직은 위=고개들기라 기본 반전)
+    const tPan  = mapClamp(fx, POS_MIN, POS_MAX, PAN.min,  PAN.max,  invPan());
+    const tTilt = mapClamp(fy, POS_MIN, POS_MAX, TILT.min, TILT.max, !invTilt());
+    curPan  += (tPan  - curPan)  * SMOOTH;
+    curTilt += (tTilt - curTilt) * SMOOTH;
+    paint(); pushServo();
+    setStatus('🎯 얼굴 추적 중...');
+  }else{
+    setStatus('얼굴이 안 보입니다 (마지막 위치 유지)');
+  }
+}
+
+// ── 6) 카메라 ──
+const faceDetection = new FaceDetection({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${f}` });
+faceDetection.setOptions({ model: 'short', minDetectionConfidence: 0.5 });
+faceDetection.onResults(onResults);
+
+$('btnCam').onclick = async () => {
+  if(running){ stopCam(); return; }
+  if(!window.isSecureContext || !navigator.mediaDevices){
+    setStatus('🔒 카메라는 HTTPS에서만 됩니다. https 주소로 열어주세요.'); return; }
+  try{
+    camera = new Camera(video, {
+      onFrame: async () => { await faceDetection.send({ image: video }); },
+      width: 480, height: 360, facingMode: 'user'
+    });
+    await camera.start();
+    running = true;
+    $('btnCam').classList.add('on'); $('btnCam').textContent = '■ 카메라 중지';
+    setStatus('📷 얼굴을 화면에 보여주세요.');
+  }catch(e){ setStatus('카메라 시작 실패: ' + (e.message||e)); }
+};
+
+function stopCam(){
+  running = false;
+  if(camera){ camera.stop(); camera = null; }
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  $('btnCam').classList.remove('on'); $('btnCam').textContent = '② 카메라 시작';
+  setStatus('카메라 중지됨.');
+}
+
+$('btnCam').disabled = false;
+paint();
+setStatus('준비 완료! ① 포니봇 연결 → ② 카메라 시작');
+</script>
+</body>
+</html>
