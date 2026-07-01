@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>포니봇 팔의 그림자 로봇 (MediaPipe Holistic)</title>
+<style>
+  :root{ --navy:#1f3864; --blue:#2563eb; --teal:#0e9e92; --amber:#e08a1e;
+         --red:#c0463b; --purple:#6d45c0; --green:#2e7d46; --ink:#1f2937; --muted:#6b7280;
+         --B:#2563eb; --S:#e08a1e; --E:#6d45c0; --G:#2e7d46; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:"맑은 고딕","Malgun Gothic",system-ui,sans-serif;
+        background:#f5f7fa; color:var(--ink); padding:18px; }
+  .wrap{ max-width:640px; margin:0 auto; }
+  h1{ color:var(--navy); font-size:21px; margin:0 0 4px; }
+  .sub{ color:var(--muted); font-size:14px; margin:0 0 14px; }
+  .card{ background:#fff; border:1px solid #e7ecf2; border-radius:14px; padding:14px; margin-bottom:12px; }
+  #status{ background:#eef3fe; border:1px solid var(--blue); color:var(--navy);
+           border-radius:10px; padding:11px 13px; font-weight:bold; font-size:14px; }
+  .row{ display:flex; gap:10px; flex-wrap:wrap; margin-top:8px; align-items:center; }
+  button{ font-family:inherit; font-size:15px; font-weight:bold; border:none; border-radius:10px;
+          padding:11px 15px; cursor:pointer; color:#fff; }
+  button:disabled{ opacity:.45; cursor:not-allowed; }
+  #btnConnect{ background:var(--blue); }
+  #btnCam{ background:var(--purple); font-size:16px; padding:13px; flex:1; }
+  #btnCam.on{ background:var(--red); }
+  #btnHome{ background:#fff; color:var(--navy); border:1px solid #d8dee8; }
+  .view{ position:relative; width:100%; aspect-ratio:4/3; background:#000; border-radius:12px;
+         overflow:hidden; transform:scaleX(-1); }
+  video,canvas{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .joint{ margin:8px 0; }
+  .joint .top{ display:flex; justify-content:space-between; font-size:13px; }
+  .gauge{ height:11px; background:#eef1f6; border-radius:6px; overflow:hidden; margin-top:3px; }
+  .gauge > i{ display:block; height:100%; width:50%; transition:width .08s; }
+  label.chk{ display:flex; align-items:center; gap:5px; font-size:12.5px; }
+  select{ padding:8px; border:1px solid #d8dee8; border-radius:8px; font-family:inherit; }
+  .hint{ font-size:12.5px; color:var(--muted); line-height:1.6; }
+  code{ background:#eef1f6; padding:1px 6px; border-radius:5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🦾 포니봇 — 팔의 그림자 로봇</h1>
+  <p class="sub">내 어깨·팔꿈치 각도를 로봇팔 서보에 복사하고, 엄지·검지 손끝으로 집게를 여닫습니다.</p>
+
+  <div class="card">
+    <div id="status">초기화 중...</div>
+    <div class="row">
+      <button id="btnConnect">① 포니봇 연결</button>
+      <span style="font-size:13px;color:#6b7280;">추적 팔</span>
+      <select id="side"><option value="right">오른팔</option><option value="left">왼팔</option></select>
+    </div>
+    <div class="row">
+      <button id="btnCam" disabled>② 카메라 시작</button>
+      <button id="btnHome">HOME</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="view"><video id="video" playsinline muted></video><canvas id="canvas"></canvas></div>
+
+    <div class="joint"><div class="top"><span style="color:var(--B)">🔄 베이스 B (좌우 스윙)</span><b id="vB">90</b></div><div class="gauge"><i id="gB" style="background:var(--B)"></i></div></div>
+    <div class="joint"><div class="top"><span style="color:var(--S)">↕ 어깨 S (들기)</span><b id="vS">90</b></div><div class="gauge"><i id="gS" style="background:var(--S)"></i></div></div>
+    <div class="joint"><div class="top"><span style="color:var(--E)">📐 팔꿈치 E (굽힘)</span><b id="vE">90</b></div><div class="gauge"><i id="gE" style="background:var(--E)"></i></div></div>
+    <div class="joint"><div class="top"><span style="color:var(--G)">🤏 집게 G (핀치)</span><b id="vG">45</b></div><div class="gauge"><i id="gG" style="background:var(--G)"></i></div></div>
+
+    <div class="row" style="margin-top:8px">
+      <label class="chk"><input type="checkbox" id="iB"> B반전</label>
+      <label class="chk"><input type="checkbox" id="iS"> S반전</label>
+      <label class="chk"><input type="checkbox" id="iE"> E반전</label>
+      <label class="chk"><input type="checkbox" id="iG"> G반전</label>
+    </div>
+  </div>
+
+  <p class="hint">
+    ※ <b>Chrome</b> + <b>HTTPS</b>(GitHub Pages 등). 카메라·블루투스 권한 허용.<br>
+    ※ 상반신이 화면에 다 보이게 서고, 추적할 팔을 카메라로 향하세요. 손도 함께 보이면 집게가 동작합니다.<br>
+    ※ 관절이 반대로 움직이면 해당 <b>반전 체크박스</b>로 맞추세요. 흐트러지면 <b>HOME</b>.
+  </p>
+</div>
+
+<!-- MediaPipe Holistic (포즈 + 양손) -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js" crossorigin="anonymous"></script>
+<script>
+const NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const NUS_RX      = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+const $ = id => document.getElementById(id);
+const setStatus = m => { $('status').textContent = m; };
+
+// 서보 각도 범위(펌웨어에서 다시 clamp)
+const R = { B:{min:20,max:160}, S:{min:20,max:160}, E:{min:20,max:160}, G:{min:0,max:90} };
+const SMOOTH = 0.30;
+
+let rxChar=null, camera=null, running=false;
+let cur={B:90,S:90,E:90,G:45};
+let lastStr='', lastSend=0;
+const video=$('video'), canvas=$('canvas'), ctx=canvas.getContext('2d');
+const inv={B:()=>$('iB').checked,S:()=>$('iS').checked,E:()=>$('iE').checked,G:()=>$('iG').checked};
+const side=()=>$('side').value;
+
+// ── BLE ──
+$('btnConnect').onclick = async () => {
+  if(!navigator.bluetooth){ setStatus('Web Bluetooth 미지원 (Chrome 사용)'); return; }
+  try{
+    const dev=await navigator.bluetooth.requestDevice({filters:[{namePrefix:'ESP'}],optionalServices:[NUS_SERVICE]});
+    dev.addEventListener('gattserverdisconnected',()=>{rxChar=null;setStatus('⚠️ 연결 끊김');});
+    const srv=await (await dev.gatt.connect()).getPrimaryService(NUS_SERVICE);
+    rxChar=await srv.getCharacteristic(NUS_RX);
+    setStatus('✅ 포니봇 연결됨! ② 카메라 시작.');
+  }catch(e){ setStatus('연결 실패: '+e.message); }
+};
+async function sendRaw(t){
+  if(!rxChar) return;
+  try{ const d=new TextEncoder().encode(t);
+    if(rxChar.writeValueWithoutResponse) await rxChar.writeValueWithoutResponse(d);
+    else await rxChar.writeValue(d);
+  }catch(e){}
+}
+function pushArm(){
+  const s='B:'+Math.round(cur.B)+',S:'+Math.round(cur.S)+',E:'+Math.round(cur.E)+',G:'+Math.round(cur.G);
+  const now=performance.now();
+  if(s!==lastStr && now-lastSend>80){ sendRaw(s); lastStr=s; lastSend=now; }
+}
+$('btnHome').onclick=()=>{ cur={B:90,S:90,E:90,G:45}; paint(); sendRaw('HOME'); lastStr=''; };
+
+// ── 게이지 ──
+function gauge(id,v,r){ $('v'+id).textContent=Math.round(v); $('g'+id).style.width=((v-r.min)/(r.max-r.min)*100)+'%'; }
+function paint(){ gauge('B',cur.B,R.B); gauge('S',cur.S,R.S); gauge('E',cur.E,R.E); gauge('G',cur.G,R.G); }
+
+// ── 각도 수학 ──
+function dist(a,b){ return Math.hypot(a.x-b.x,a.y-b.y,(a.z||0)-(b.z||0)); }
+function angleAt(a,b,c){        // b 지점의 내각 (0~180)
+  const v1x=a.x-b.x,v1y=a.y-b.y,v2x=c.x-b.x,v2y=c.y-b.y;
+  const d=v1x*v2x+v1y*v2y, m=(Math.hypot(v1x,v1y)*Math.hypot(v2x,v2y))||1e-6;
+  return Math.acos(Math.max(-1,Math.min(1,d/m)))*180/Math.PI;
+}
+function raiseFromDown(a,b){    // a->b 벡터가 '아래(0,1)'와 이루는 각 (0=아래,90=수평,180=위)
+  const vx=b.x-a.x, vy=b.y-a.y, m=Math.hypot(vx,vy)||1e-6;
+  return Math.acos(Math.max(-1,Math.min(1,vy/m)))*180/Math.PI;
+}
+function mapClamp(x,inLo,inHi,r,invert){
+  let t=(x-inLo)/(inHi-inLo); t=Math.max(0,Math.min(1,t));
+  if(invert) t=1-t;
+  return r.min + t*(r.max-r.min);
+}
+function ema(k,target){ cur[k]+=(target-cur[k])*SMOOTH; }
+
+// ── 결과 처리 ──
+function onResults(res){
+  canvas.width=video.videoWidth||640; canvas.height=video.videoHeight||480;
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(res.image,0,0,canvas.width,canvas.height);
+
+  const pose=res.poseLandmarks;
+  const sd=side();
+  const hand = (sd==='right') ? res.rightHandLandmarks : res.leftHandLandmarks;
+
+  if(pose && window.POSE_CONNECTIONS)
+    drawConnectors(ctx,pose,POSE_CONNECTIONS,{color:'#8aa0c8',lineWidth:2});
+  if(hand && window.HAND_CONNECTIONS){
+    drawConnectors(ctx,hand,HAND_CONNECTIONS,{color:'#2e7d46',lineWidth:3});
+    drawLandmarks(ctx,hand,{color:'#e08a1e',radius:2});
+  }
+
+  let ok=false;
+  if(pose){
+    const [si,ei,wi] = (sd==='right') ? [12,14,16] : [11,13,15];
+    const S=pose[si], E=pose[ei], W=pose[wi];
+    if(S&&E&&W && (S.visibility||1)>0.4 && (E.visibility||1)>0.4){
+      ok=true;
+      // 어깨(들기): 위팔이 아래와 이루는 각 0(아래)~180(위)
+      ema('S', mapClamp(raiseFromDown(S,E), 0,175, R.S, inv.S()));
+      // 팔꿈치(굽힘): 어깨-팔꿈치-손목 내각. 편팔=175, 굽힘=40
+      ema('E', mapClamp(angleAt(S,E,W), 40,175, R.E, inv.E()));
+      // 베이스(좌우 스윙): 위팔의 수평 성분
+      ema('B', mapClamp(E.x - S.x, -0.20,0.20, R.B, inv.B()));
+      // 팔꿈치 강조 표시
+      ctx.fillStyle='#6d45c0';
+      ctx.beginPath(); ctx.arc(E.x*canvas.width,E.y*canvas.height,6,0,7); ctx.fill();
+    }
+  }
+
+  if(hand){   // 엄지(4)-검지(8) 손끝 거리 → 집게
+    const handSize=dist(hand[0],hand[9])||1e-4;
+    const ratio=dist(hand[4],hand[8])/handSize;
+    ema('G', mapClamp(ratio, 0.15,0.95, R.G, inv.G()));
+    // 엄지-검지 연결선
+    ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.beginPath();
+    ctx.moveTo(hand[4].x*canvas.width,hand[4].y*canvas.height);
+    ctx.lineTo(hand[8].x*canvas.width,hand[8].y*canvas.height); ctx.stroke();
+  }
+
+  paint(); pushArm();
+  setStatus(ok ? '🦾 팔 추적 중' + (hand?' + 집게':'') : '팔이 안 보입니다 (상반신을 보이게)');
+}
+
+// ── Holistic ──
+const holistic = new Holistic({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${f}` });
+holistic.setOptions({ modelComplexity:1, smoothLandmarks:true, refineFaceLandmarks:false,
+                      minDetectionConfidence:0.5, minTrackingConfidence:0.5 });
+holistic.onResults(onResults);
+
+$('btnCam').onclick = async () => {
+  if(running){ stopCam(); return; }
+  if(!window.isSecureContext || !navigator.mediaDevices){ setStatus('🔒 HTTPS에서만 카메라 가능'); return; }
+  try{
+    camera = new Camera(video, { onFrame: async()=>{ await holistic.send({image:video}); }, width:480, height:360, facingMode:'user' });
+    await camera.start();
+    running=true; $('btnCam').classList.add('on'); $('btnCam').textContent='■ 카메라 중지';
+    setStatus('📷 상반신을 보이고 팔을 움직여 보세요.');
+  }catch(e){ setStatus('카메라 시작 실패: '+(e.message||e)); }
+};
+function stopCam(){
+  running=false; if(camera){ camera.stop(); camera=null; }
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  $('btnCam').classList.remove('on'); $('btnCam').textContent='② 카메라 시작';
+  setStatus('카메라 중지됨.'); if(rxChar) sendRaw('HOME');
+}
+
+$('btnCam').disabled=false; paint();
+setStatus('준비 완료! ① 포니봇 연결 → ② 카메라 시작');
+</script>
+</body>
+</html>
