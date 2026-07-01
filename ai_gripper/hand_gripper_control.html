@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 손가락 집게 제어 - PonyBot</title>
+<style>
+  :root{
+    --bg:#0e1726; --card:#16213a; --line:#27375c;
+    --txt:#e8eefc; --muted:#8da3cc; --accent:#34d399; --warn:#f87171; --hi:#fbbf24;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;font-family:'Segoe UI',-apple-system,sans-serif;}
+  body{background:var(--bg);color:var(--txt);padding:16px;max-width:920px;margin:0 auto;}
+  h1{font-size:20px;margin-bottom:4px;}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:16px;}
+  .row{display:flex;gap:14px;flex-wrap:wrap;}
+  .col{flex:1;min-width:300px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px;}
+  .videowrap{position:relative;border-radius:12px;overflow:hidden;background:#000;aspect-ratio:4/3;}
+  video,canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+  canvas{transform:scaleX(-1);}            /* 거울 모드 */
+  video{transform:scaleX(-1);visibility:hidden;}
+  button{background:var(--accent);color:#06281c;border:none;border-radius:10px;
+    padding:11px 14px;font-size:14px;font-weight:700;cursor:pointer;}
+  button.sec{background:#22325a;color:var(--txt);}
+  button:disabled{opacity:.45;cursor:not-allowed;}
+  .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
+  .pill{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700;}
+  .ok{background:#0f3d2e;color:var(--accent);}
+  .no{background:#3d1414;color:var(--warn);}
+  .gauge{height:26px;background:#0c1426;border:1px solid var(--line);border-radius:999px;overflow:hidden;}
+  .gauge>div{height:100%;width:50%;background:linear-gradient(90deg,#f87171,#fbbf24,#34d399);transition:width .08s linear;}
+  .big{font-size:46px;font-weight:800;letter-spacing:-1px;}
+  .label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.5px;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  code{background:#0c1426;padding:2px 6px;border-radius:6px;color:var(--hi);font-size:12px;}
+  .note{font-size:12px;color:var(--muted);line-height:1.6;}
+  input[type=range]{width:100%;}
+  .claw{font-size:54px;text-align:center;line-height:1;}
+</style>
+</head>
+<body>
+  <h1>🤖 AI 손가락 집게 제어</h1>
+  <div class="sub">엄지·검지를 벌리고 오므리면 포니봇 집게(S4)가 따라 움직입니다 · MediaPipe Hands + Web Bluetooth</div>
+
+  <div class="row">
+    <!-- 왼쪽: 카메라 -->
+    <div class="col">
+      <div class="card">
+        <div class="videowrap">
+          <video id="video" playsinline></video>
+          <canvas id="canvas"></canvas>
+        </div>
+        <div class="btns">
+          <button id="btnCam">📷 카메라 시작</button>
+          <button id="btnBle" class="sec">🔵 블루투스 연결</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 오른쪽: 상태/제어 -->
+    <div class="col">
+      <div class="card">
+        <div class="grid2">
+          <div>
+            <div class="label">블루투스</div>
+            <span id="bleState" class="pill no">미연결</span>
+          </div>
+          <div>
+            <div class="label">손 인식</div>
+            <span id="handState" class="pill no">대기</span>
+          </div>
+        </div>
+        <div style="margin-top:14px">
+          <div class="claw" id="claw">🖐️</div>
+          <div style="text-align:center;margin:6px 0 12px">
+            <span class="big" id="angleTxt">45</span><span class="label"> &nbsp;DEG (집게 각도)</span>
+          </div>
+          <div class="gauge"><div id="gaugeFill"></div></div>
+          <div class="note" style="display:flex;justify-content:space-between;margin-top:4px">
+            <span>0° 닫힘</span><span>90° 열림</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 수동 테스트 -->
+      <div class="card">
+        <div class="label" style="margin-bottom:8px">수동 테스트 (카메라 없이)</div>
+        <input id="manual" type="range" min="0" max="90" value="45">
+        <div class="btns">
+          <button id="btnOpen" class="sec">집게 열기 (90)</button>
+          <button id="btnClose" class="sec">집게 닫기 (0)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card note">
+    <b>사용 방법</b><br>
+    1) 포니봇에 <code>ai_gripper_ble.py</code> 실행 → OLED에 <code>BLE: WAITING</code> 표시<br>
+    2) <b>블루투스 연결</b> 버튼 → 목록에서 <code>ESP-ARM</code> 선택<br>
+    3) <b>카메라 시작</b> → 손을 화면에 보이고 엄지·검지를 벌렸다 오므리기<br>
+    ⚠️ Web Bluetooth·카메라는 <b>HTTPS</b>에서만 동작합니다(GitHub Pages 권장). Chrome/Edge(데스크톱·안드로이드) 지원, iOS Safari 미지원.<br>
+    🔧 집게가 반대로 움직이면 포니봇 코드에서 보내는 값을 <code>90 - angle</code>로 바꾸거나, 아래 <code>INVERT</code>를 <code>true</code>로 하세요.
+  </div>
+
+<!-- MediaPipe Hands (AI 손 인식) -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script>
+// ===== Nordic UART Service UUID (포니봇 ble_library와 동일) =====
+const UART_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const UART_RX      = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // 보드로 쓰기(Write)
+
+// ===== 각도/매핑 설정 =====
+const GRIP_MIN = 0, GRIP_MAX = 90;   // 교재: 집게 0~90
+const INVERT   = false;              // true면 열림/닫힘 방향 반전
+// 핀치 비율(엄지~검지 거리 / 손 크기) 기준값 — 환경에 맞게 미세조정
+const RATIO_CLOSED = 0.15;           // 완전히 오므렸을 때
+const RATIO_OPEN   = 0.95;           // 활짝 벌렸을 때
+const SMOOTH = 0.35;                 // 0~1, 클수록 반응 빠름(떨림↑)
+
+// ===== 전역 상태 =====
+let rxChar = null;                   // BLE 쓰기 캐릭터리스틱
+let smoothAngle = 45;
+let lastSent = -1, lastSendTime = 0;
+
+const $ = (id)=>document.getElementById(id);
+const video = $('video'), canvas = $('canvas'), ctx = canvas.getContext('2d');
+
+// ---------- UI 갱신 ----------
+function setBleState(connected){
+  const el = $('bleState');
+  el.textContent = connected ? '연결됨' : '미연결';
+  el.className = 'pill ' + (connected ? 'ok' : 'no');
+}
+function setHandState(found){
+  const el = $('handState');
+  el.textContent = found ? '인식 중' : '없음';
+  el.className = 'pill ' + (found ? 'ok' : 'no');
+}
+function updateGauge(angle){
+  $('angleTxt').textContent = Math.round(angle);
+  $('gaugeFill').style.width = (angle/GRIP_MAX*100) + '%';
+  $('claw').textContent = angle > 55 ? '🖐️' : (angle < 25 ? '🤏' : '✋');
+}
+
+// ---------- BLE 연결 ----------
+async function connectBLE(){
+  if(!navigator.bluetooth){ alert('이 브라우저는 Web Bluetooth를 지원하지 않습니다. Chrome/Edge를 사용하세요.'); return; }
+  try{
+    const device = await navigator.bluetooth.requestDevice({
+      filters:[{ namePrefix:'ESP' }],
+      optionalServices:[UART_SERVICE]
+    });
+    device.addEventListener('gattserverdisconnected', ()=>{ rxChar=null; setBleState(false); });
+    const server  = await device.gatt.connect();
+    const service = await server.getPrimaryService(UART_SERVICE);
+    rxChar = await service.getCharacteristic(UART_RX);
+    setBleState(true);
+    console.log('BLE 연결:', device.name);
+  }catch(e){ console.warn(e); alert('연결 실패: ' + e.message); }
+}
+
+// ---------- 각도 전송 (throttle: 변화>=2° & 70ms 간격) ----------
+async function sendAngle(angle){
+  if(!rxChar) return;
+  const a = Math.round(angle);
+  const now = performance.now();
+  if(a === lastSent || now - lastSendTime < 70) return;
+  try{
+    const msg = new TextEncoder().encode(String(a));
+    if(rxChar.writeValueWithoutResponse) await rxChar.writeValueWithoutResponse(msg);
+    else await rxChar.writeValue(msg);
+    lastSent = a; lastSendTime = now;
+  }catch(e){ /* 혼잡 시 다음 프레임에서 재시도 */ }
+}
+async function sendRaw(text){
+  if(!rxChar) return;
+  try{ await rxChar.writeValue(new TextEncoder().encode(text)); lastSent=-1; }catch(e){}
+}
+
+// ---------- 핀치 → 각도 ----------
+function dist(a,b){ const dx=a.x-b.x, dy=a.y-b.y, dz=(a.z||0)-(b.z||0); return Math.hypot(dx,dy,dz); }
+function pinchToAngle(lm){
+  // 4=엄지끝, 8=검지끝, 0=손목, 9=중지 MCP(손 크기 기준)
+  const handSize = dist(lm[0], lm[9]) || 0.0001;
+  const ratio = dist(lm[4], lm[8]) / handSize;          // 거리/손크기 = 스케일 무관
+  let t = (ratio - RATIO_CLOSED) / (RATIO_OPEN - RATIO_CLOSED);
+  t = Math.max(0, Math.min(1, t));
+  let angle = GRIP_MIN + t * (GRIP_MAX - GRIP_MIN);
+  if(INVERT) angle = GRIP_MAX - (angle - GRIP_MIN);
+  return angle;
+}
+
+// ---------- MediaPipe 결과 처리 ----------
+function onResults(results){
+  canvas.width = video.videoWidth || 640;
+  canvas.height = video.videoHeight || 480;
+  ctx.save();
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(results.image,0,0,canvas.width,canvas.height);
+
+  const hands = results.multiHandLandmarks;
+  if(hands && hands.length > 0){
+    const lm = hands[0];
+    if(window.drawConnectors){
+      drawConnectors(ctx, lm, HAND_CONNECTIONS, {color:'#34d399', lineWidth:3});
+      drawLandmarks(ctx, lm, {color:'#fbbf24', radius:3});
+    }
+    // 엄지-검지 연결선 강조
+    ctx.strokeStyle='#fff'; ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.moveTo(lm[4].x*canvas.width, lm[4].y*canvas.height);
+    ctx.lineTo(lm[8].x*canvas.width, lm[8].y*canvas.height);
+    ctx.stroke();
+
+    const target = pinchToAngle(lm);
+    smoothAngle = smoothAngle + (target - smoothAngle) * SMOOTH;  // EMA 평활
+    updateGauge(smoothAngle);
+    sendAngle(smoothAngle);
+    setHandState(true);
+  }else{
+    setHandState(false);
+  }
+  ctx.restore();
+}
+
+// ---------- 카메라 + MediaPipe 시작 ----------
+let camera = null;
+async function startCamera(){
+  const hands = new Hands({ locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+  hands.setOptions({ maxNumHands:1, modelComplexity:1,
+    minDetectionConfidence:0.6, minTrackingConfidence:0.6 });
+  hands.onResults(onResults);
+
+  camera = new Camera(video, {
+    onFrame: async ()=>{ await hands.send({image:video}); },
+    width:640, height:480
+  });
+  await camera.start();
+  $('btnCam').textContent = '📷 작동 중';
+  $('btnCam').disabled = true;
+}
+
+// ---------- 이벤트 바인딩 ----------
+$('btnBle').onclick = connectBLE;
+$('btnCam').onclick = startCamera;
+$('manual').oninput = (e)=>{ const a=+e.target.value; updateGauge(a); sendAngle(a); };
+$('btnOpen').onclick = ()=>{ $('manual').value=90; updateGauge(90); sendRaw('OPEN'); };
+$('btnClose').onclick = ()=>{ $('manual').value=0; updateGauge(0); sendRaw('CLOSE'); };
+
+updateGauge(45);
+</script>
+</body>
+</html>
