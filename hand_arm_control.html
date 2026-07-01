@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 손 제어 로봇팔 - PonyBot</title>
+<style>
+  :root{
+    --bg:#0e1726; --card:#16213a; --line:#27375c;
+    --txt:#e8eefc; --muted:#8da3cc; --accent:#34d399; --warn:#f87171;
+    --base:#60a5fa; --sh:#f59e0b; --grip:#34d399;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;font-family:'Segoe UI',-apple-system,sans-serif;}
+  body{background:var(--bg);color:var(--txt);padding:16px;max-width:960px;margin:0 auto;}
+  h1{font-size:20px;margin-bottom:4px;}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:16px;}
+  .row{display:flex;gap:14px;flex-wrap:wrap;}
+  .col{flex:1;min-width:300px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px;}
+  .videowrap{position:relative;border-radius:12px;overflow:hidden;background:#000;aspect-ratio:4/3;}
+  video,canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+  canvas{transform:scaleX(-1);}
+  video{transform:scaleX(-1);visibility:hidden;}
+  button{background:var(--accent);color:#06281c;border:none;border-radius:10px;
+    padding:11px 14px;font-size:14px;font-weight:700;cursor:pointer;}
+  button.sec{background:#22325a;color:var(--txt);}
+  button:disabled{opacity:.45;cursor:not-allowed;}
+  .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
+  .pill{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700;}
+  .ok{background:#0f3d2e;color:var(--accent);}
+  .no{background:#3d1414;color:var(--warn);}
+  .label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.5px;}
+  .joint{margin:12px 0;}
+  .joint .top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px;}
+  .joint .nm{font-weight:700;font-size:14px;}
+  .joint .val{font-size:22px;font-weight:800;}
+  .gauge{height:14px;background:#0c1426;border:1px solid var(--line);border-radius:999px;overflow:hidden;}
+  .gauge>div{height:100%;width:50%;transition:width .08s linear;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  code{background:#0c1426;padding:2px 6px;border-radius:6px;color:#fbbf24;font-size:12px;}
+  .note{font-size:12px;color:var(--muted);line-height:1.6;}
+  label.chk{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--txt);cursor:pointer;}
+  input[type=range]{width:100%;}
+  .minirow{display:flex;gap:14px;flex-wrap:wrap;margin-top:6px;}
+</style>
+</head>
+<body>
+  <h1>🦾 AI 손 제어 로봇팔</h1>
+  <div class="sub">손을 좌우로 = 회전 · 위아래로 = 상하 · 엄지검지 핀치 = 집게 · MediaPipe Hands + Web Bluetooth</div>
+
+  <div class="row">
+    <!-- 카메라 -->
+    <div class="col">
+      <div class="card">
+        <div class="videowrap">
+          <video id="video" playsinline></video>
+          <canvas id="canvas"></canvas>
+        </div>
+        <div class="btns">
+          <button id="btnCam">📷 카메라 시작</button>
+          <button id="btnBle" class="sec">🔵 블루투스 연결</button>
+          <button id="btnHome" class="sec">🏠 HOME</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="label" style="margin-bottom:8px">방향 보정 (반대로 움직이면 체크)</div>
+        <div class="minirow">
+          <label class="chk"><input type="checkbox" id="invBase"> 회전 반전</label>
+          <label class="chk"><input type="checkbox" id="invSh"> 상하 반전</label>
+          <label class="chk"><input type="checkbox" id="invGrip"> 집게 반전</label>
+        </div>
+      </div>
+    </div>
+
+    <!-- 상태/관절 -->
+    <div class="col">
+      <div class="card">
+        <div class="grid2">
+          <div><div class="label">블루투스</div><span id="bleState" class="pill no">미연결</span></div>
+          <div><div class="label">손 인식</div><span id="handState" class="pill no">대기</span></div>
+        </div>
+
+        <div class="joint">
+          <div class="top"><span class="nm" style="color:var(--base)">🔄 회전 (베이스 S1)</span><span class="val" id="vB">90</span></div>
+          <div class="gauge"><div id="gB" style="background:var(--base)"></div></div>
+        </div>
+        <div class="joint">
+          <div class="top"><span class="nm" style="color:var(--sh)">↕️ 상하 (어깨 S2)</span><span class="val" id="vS">90</span></div>
+          <div class="gauge"><div id="gS" style="background:var(--sh)"></div></div>
+        </div>
+        <div class="joint">
+          <div class="top"><span class="nm" style="color:var(--grip)">🤏 집게 (S4)</span><span class="val" id="vG">45</span></div>
+          <div class="gauge"><div id="gG" style="background:var(--grip)"></div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="label" style="margin-bottom:6px">팔꿈치 (S3) 수동 보정</div>
+        <input id="elbow" type="range" min="0" max="180" value="90">
+        <div class="note">팔꿈치는 손동작 대신 슬라이더로 맞춥니다. (도전과제: 두 번째 손으로 제어)</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card note">
+    <b>사용 순서</b><br>
+    1) 포니봇에서 <code>ai_arm_ble.py</code> 실행 → OLED <code>BLE WAITING</code><br>
+    2) <b>블루투스 연결</b> → <code>ESP-ARM</code> 선택 → <b>카메라 시작</b><br>
+    3) 손을 화면 가운데에 두고, 좌우로 옮겨 회전 / 위아래로 옮겨 상하 / 엄지검지로 집게 조작<br>
+    ⚠️ HTTPS(예: GitHub Pages)에서만 동작, Chrome/Edge(데스크톱·안드로이드) 지원 · iOS Safari 미지원<br>
+    🦾 로봇팔이 갑자기 크게 움직이지 않도록 처음엔 손을 천천히. 팔이 무거우면 받쳐주세요.
+  </div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script>
+// ===== Nordic UART =====
+const UART_SERVICE='6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const UART_RX     ='6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+
+// ===== 관절 범위 (안전을 위해 끝값은 약간 여유) =====
+const RANGE = {
+  B:{min:10, max:170},   // 회전 (베이스)
+  S:{min:30, max:150},   // 상하 (어깨)
+  G:{min:0,  max:90},    // 집게
+};
+// 핀치 비율 기준 (엄지~검지 거리 / 손 크기)
+const RATIO_CLOSED=0.15, RATIO_OPEN=0.95;
+// 손 위치 사용 구간 (화면 가장자리는 잘라 안정화): 0.15~0.85
+const POS_MIN=0.15, POS_MAX=0.85;
+const SMOOTH=0.30;     // EMA 평활 (작을수록 부드럽고 느림)
+
+// ===== 상태 =====
+let rxChar=null;
+let cur={B:90, S:90, G:45};          // 평활된 현재 각도
+let elbow=90;
+let lastStr='', lastSend=0;
+
+const $=(id)=>document.getElementById(id);
+const video=$('video'), canvas=$('canvas'), ctx=canvas.getContext('2d');
+const inv={B:()=>$('invBase').checked, S:()=>$('invSh').checked, G:()=>$('invGrip').checked};
+
+function setBle(c){ const e=$('bleState'); e.textContent=c?'연결됨':'미연결'; e.className='pill '+(c?'ok':'no'); }
+function setHand(c){ const e=$('handState'); e.textContent=c?'인식 중':'없음'; e.className='pill '+(c?'ok':'no'); }
+function gauge(id, v, min, max){
+  $('v'+id).textContent=Math.round(v);
+  $('g'+id).style.width=((v-min)/(max-min)*100)+'%';
+}
+function paint(){
+  gauge('B', cur.B, RANGE.B.min, RANGE.B.max);
+  gauge('S', cur.S, RANGE.S.min, RANGE.S.max);
+  gauge('G', cur.G, RANGE.G.min, RANGE.G.max);
+}
+
+// ---------- BLE ----------
+async function connectBLE(){
+  if(!navigator.bluetooth){ alert('Web Bluetooth 미지원 브라우저입니다. Chrome/Edge를 쓰세요.'); return; }
+  try{
+    const dev=await navigator.bluetooth.requestDevice({filters:[{namePrefix:'ESP'}],optionalServices:[UART_SERVICE]});
+    dev.addEventListener('gattserverdisconnected',()=>{rxChar=null;setBle(false);});
+    const srv=await (await dev.gatt.connect()).getPrimaryService(UART_SERVICE);
+    rxChar=await srv.getCharacteristic(UART_RX);
+    setBle(true);
+  }catch(e){ alert('연결 실패: '+e.message); }
+}
+async function send(text){
+  if(!rxChar) return;
+  try{
+    const msg=new TextEncoder().encode(text);
+    if(rxChar.writeValueWithoutResponse) await rxChar.writeValueWithoutResponse(msg);
+    else await rxChar.writeValue(msg);
+  }catch(e){}
+}
+// 4관절을 한 문자열로 전송 (변화 있을 때 & 80ms 간격)
+function pushArm(){
+  const s=`B:${Math.round(cur.B)},S:${Math.round(cur.S)},E:${Math.round(elbow)},G:${Math.round(cur.G)}`;
+  const now=performance.now();
+  if(s!==lastStr && now-lastSend>80){ send(s); lastStr=s; lastSend=now; }
+}
+
+// ---------- 수학 헬퍼 ----------
+function dist(a,b){const dx=a.x-b.x,dy=a.y-b.y,dz=(a.z||0)-(b.z||0);return Math.hypot(dx,dy,dz);}
+function mapClamp(x, inLo, inHi, outLo, outHi, invert){
+  let t=(x-inLo)/(inHi-inLo); t=Math.max(0,Math.min(1,t));
+  if(invert) t=1-t;
+  return outLo + t*(outHi-outLo);
+}
+
+// ---------- 랜드마크 -> 목표 각도 ----------
+function handToTargets(lm){
+  // 위치 기준점: 9번(중지 MCP) - 핀치(4,8) 움직임과 독립적
+  const px=lm[9].x, py=lm[9].y;
+  const handSize=dist(lm[0],lm[9])||0.0001;
+  const ratio=dist(lm[4],lm[8])/handSize;
+
+  const B=mapClamp(px, POS_MIN, POS_MAX, RANGE.B.min, RANGE.B.max, inv.B());
+  // 화면 위(y작음)=팔 위로: 기본 반전. 사용자가 다시 뒤집을 수 있음.
+  const S=mapClamp(py, POS_MIN, POS_MAX, RANGE.S.min, RANGE.S.max, !inv.S());
+  const G=mapClamp(ratio, RATIO_CLOSED, RATIO_OPEN, RANGE.G.min, RANGE.G.max, inv.G());
+  return {B,S,G};
+}
+
+// ---------- MediaPipe 결과 ----------
+function onResults(res){
+  canvas.width=video.videoWidth||640; canvas.height=video.videoHeight||480;
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(res.image,0,0,canvas.width,canvas.height);
+
+  const hands=res.multiHandLandmarks;
+  if(hands && hands.length>0){
+    const lm=hands[0];
+    if(window.drawConnectors){
+      drawConnectors(ctx,lm,HAND_CONNECTIONS,{color:'#34d399',lineWidth:3});
+      drawLandmarks(ctx,lm,{color:'#fbbf24',radius:3});
+    }
+    ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.beginPath();
+    ctx.moveTo(lm[4].x*canvas.width,lm[4].y*canvas.height);
+    ctx.lineTo(lm[8].x*canvas.width,lm[8].y*canvas.height); ctx.stroke();
+
+    const t=handToTargets(lm);
+    cur.B+=(t.B-cur.B)*SMOOTH;
+    cur.S+=(t.S-cur.S)*SMOOTH;
+    cur.G+=(t.G-cur.G)*SMOOTH;
+    paint(); pushArm(); setHand(true);
+  }else{
+    setHand(false);
+  }
+}
+
+// ---------- 카메라 시작 ----------
+let camera=null;
+async function startCamera(){
+  const hands=new Hands({locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
+  hands.setOptions({maxNumHands:1, modelComplexity:1, minDetectionConfidence:0.6, minTrackingConfidence:0.6});
+  hands.onResults(onResults);
+  camera=new Camera(video,{onFrame:async()=>{await hands.send({image:video});}, width:640, height:480});
+  await camera.start();
+  $('btnCam').textContent='📷 작동 중'; $('btnCam').disabled=true;
+}
+
+// ---------- 이벤트 ----------
+$('btnBle').onclick=connectBLE;
+$('btnCam').onclick=startCamera;
+$('btnHome').onclick=()=>{ cur={B:90,S:90,G:45}; elbow=90; $('elbow').value=90; paint(); send('HOME'); lastStr=''; };
+$('elbow').oninput=(e)=>{ elbow=+e.target.value; pushArm(); };
+paint();
+</script>
+</body>
+</html>
