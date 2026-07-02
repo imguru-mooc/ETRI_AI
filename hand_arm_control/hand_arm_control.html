@@ -8,7 +8,7 @@
   :root{
     --bg:#0e1726; --card:#16213a; --line:#27375c;
     --txt:#e8eefc; --muted:#8da3cc; --accent:#34d399; --warn:#f87171;
-    --base:#60a5fa; --sh:#f59e0b; --grip:#34d399;
+    --base:#60a5fa; --sh:#f59e0b; --grip:#34d399; --elb:#c084fc;
   }
   *{box-sizing:border-box;margin:0;padding:0;font-family:'Segoe UI',-apple-system,sans-serif;}
   body{background:var(--bg);color:var(--txt);padding:16px;max-width:960px;margin:0 auto;}
@@ -41,7 +41,14 @@
   .note{font-size:12px;color:var(--muted);line-height:1.6;}
   label.chk{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--txt);cursor:pointer;}
   input[type=range]{width:100%;}
+  input[type=range]:disabled{opacity:.35;}
   .minirow{display:flex;gap:14px;flex-wrap:wrap;margin-top:6px;}
+  /* 수동 보정 행 */
+  .man{margin:10px 0;}
+  .man .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;}
+  .man .nm{font-weight:700;font-size:13px;}
+  .man label.chk{font-size:12px;color:var(--muted);}
+  .man label.chk input:checked~span, .man label.chk:has(input:checked){color:var(--accent);}
 </style>
 </head>
 <body>
@@ -95,9 +102,41 @@
       </div>
 
       <div class="card">
-        <div class="label" style="margin-bottom:6px">팔꿈치 (S3) 수동 보정</div>
-        <input id="elbow" type="range" min="0" max="180" value="90">
-        <div class="note">팔꿈치는 손동작 대신 슬라이더로 맞춥니다. (도전과제: 두 번째 손으로 제어)</div>
+        <div class="label" style="margin-bottom:6px">관절 수동 보정 (수동 체크 시 손 대신 슬라이더로 제어)</div>
+
+        <div class="man">
+          <div class="head">
+            <span class="nm" style="color:var(--base)">🔄 회전 (베이스 S1)</span>
+            <label class="chk"><input type="checkbox" id="manB"> 수동</label>
+          </div>
+          <input id="sldB" type="range" min="10" max="170" value="90" disabled>
+        </div>
+
+        <div class="man">
+          <div class="head">
+            <span class="nm" style="color:var(--sh)">↕️ 상하 (어깨 S2)</span>
+            <label class="chk"><input type="checkbox" id="manS"> 수동</label>
+          </div>
+          <input id="sldS" type="range" min="30" max="150" value="90" disabled>
+        </div>
+
+        <div class="man">
+          <div class="head">
+            <span class="nm" style="color:var(--elb)">💪 팔꿈치 (S3)</span>
+            <label class="chk" style="color:var(--muted)">항상 수동</label>
+          </div>
+          <input id="elbow" type="range" min="0" max="180" value="90">
+        </div>
+
+        <div class="man">
+          <div class="head">
+            <span class="nm" style="color:var(--grip)">🤏 집게 (S4)</span>
+            <label class="chk"><input type="checkbox" id="manG"> 수동</label>
+          </div>
+          <input id="sldG" type="range" min="0" max="90" value="45" disabled>
+        </div>
+
+        <div class="note">수동 체크를 해제하면 다시 손 동작으로 제어됩니다. 자동 모드일 때 슬라이더는 현재 각도를 따라 움직입니다. (도전과제: 팔꿈치를 두 번째 손으로 제어)</div>
       </div>
     </div>
   </div>
@@ -107,6 +146,7 @@
     1) 포니봇에서 <code>ai_arm_ble.py</code> 실행 → OLED <code>BLE WAITING</code><br>
     2) <b>블루투스 연결</b> → <code>ESP-ARM</code> 선택 → <b>카메라 시작</b><br>
     3) 손을 화면 가운데에 두고, 좌우로 옮겨 회전 / 위아래로 옮겨 상하 / 엄지검지로 집게 조작<br>
+    4) 특정 관절만 정밀하게 맞추고 싶으면 <b>수동</b>을 체크하고 슬라이더로 조정<br>
     ⚠️ HTTPS(예: GitHub Pages)에서만 동작, Chrome/Edge(데스크톱·안드로이드) 지원 · iOS Safari 미지원<br>
     🦾 로봇팔이 갑자기 크게 움직이지 않도록 처음엔 손을 천천히. 팔이 무거우면 받쳐주세요.
   </div>
@@ -140,6 +180,8 @@ let lastStr='', lastSend=0;
 const $=(id)=>document.getElementById(id);
 const video=$('video'), canvas=$('canvas'), ctx=canvas.getContext('2d');
 const inv={B:()=>$('invBase').checked, S:()=>$('invSh').checked, G:()=>$('invGrip').checked};
+// 수동 모드 여부 (관절별)
+const man={B:()=>$('manB').checked, S:()=>$('manS').checked, G:()=>$('manG').checked};
 
 function setBle(c){ const e=$('bleState'); e.textContent=c?'연결됨':'미연결'; e.className='pill '+(c?'ok':'no'); }
 function setHand(c){ const e=$('handState'); e.textContent=c?'인식 중':'없음'; e.className='pill '+(c?'ok':'no'); }
@@ -151,6 +193,10 @@ function paint(){
   gauge('B', cur.B, RANGE.B.min, RANGE.B.max);
   gauge('S', cur.S, RANGE.S.min, RANGE.S.max);
   gauge('G', cur.G, RANGE.G.min, RANGE.G.max);
+  // 자동 모드인 관절은 슬라이더가 현재 각도를 따라오게 (수동 전환 시 튀지 않도록)
+  for(const j of ['B','S','G']){
+    if(!man[j]()) $('sld'+j).value=Math.round(cur[j]);
+  }
 }
 
 // ---------- BLE ----------
@@ -219,9 +265,10 @@ function onResults(res){
     ctx.lineTo(lm[8].x*canvas.width,lm[8].y*canvas.height); ctx.stroke();
 
     const t=handToTargets(lm);
-    cur.B+=(t.B-cur.B)*SMOOTH;
-    cur.S+=(t.S-cur.S)*SMOOTH;
-    cur.G+=(t.G-cur.G)*SMOOTH;
+    // 수동 모드가 아닌 관절만 손 동작으로 갱신
+    if(!man.B()) cur.B+=(t.B-cur.B)*SMOOTH;
+    if(!man.S()) cur.S+=(t.S-cur.S)*SMOOTH;
+    if(!man.G()) cur.G+=(t.G-cur.G)*SMOOTH;
     paint(); pushArm(); setHand(true);
   }else{
     setHand(false);
@@ -239,10 +286,31 @@ async function startCamera(){
   $('btnCam').textContent='📷 작동 중'; $('btnCam').disabled=true;
 }
 
+// ---------- 수동 보정 이벤트 ----------
+function bindManual(j){
+  const chk=$('man'+j), sld=$('sld'+j);
+  // 체크 토글: 켜면 슬라이더 활성화(현재 각도에서 시작), 끄면 다시 손 제어
+  chk.onchange=()=>{
+    sld.disabled=!chk.checked;
+    if(chk.checked){ sld.value=Math.round(cur[j]); }
+  };
+  // 슬라이더 조작: 해당 관절 각도 직접 설정 후 전송
+  sld.oninput=()=>{
+    if(!chk.checked) return;
+    cur[j]=+sld.value;
+    paint(); pushArm();
+  };
+}
+['B','S','G'].forEach(bindManual);
+
 // ---------- 이벤트 ----------
 $('btnBle').onclick=connectBLE;
 $('btnCam').onclick=startCamera;
-$('btnHome').onclick=()=>{ cur={B:90,S:90,G:45}; elbow=90; $('elbow').value=90; paint(); send('HOME'); lastStr=''; };
+$('btnHome').onclick=()=>{
+  cur={B:90,S:90,G:45}; elbow=90; $('elbow').value=90;
+  $('sldB').value=90; $('sldS').value=90; $('sldG').value=45;
+  paint(); send('HOME'); lastStr='';
+};
 $('elbow').oninput=(e)=>{ elbow=+e.target.value; pushArm(); };
 paint();
 </script>
